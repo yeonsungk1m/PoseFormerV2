@@ -23,6 +23,8 @@ from common.opt import opts
 LATEST_CHECKPOINT = "latest_epoch.pth"
 BEST_CHECKPOINT = "best_epoch.pth"
 
+JOINTS_LEFT = [5, 6, 7, 11, 12, 13]
+JOINTS_RIGHT = [2, 3, 4, 8, 9, 10]
 
 def _resolve_resume_path(opt):
     """Return an absolute path to the checkpoint provided via --resume."""
@@ -35,6 +37,61 @@ def _resolve_resume_path(opt):
 
     return os.path.join(opt.checkpoint, opt.resume)
 
+def _forward_pose_model(
+    opt,
+    model,
+    input_2d,
+    joints_left=None,
+    joints_right=None,
+):
+    """Run the pose model, handling optional test-time augmentation."""
+
+    if joints_left is None:
+        joints_left = JOINTS_LEFT
+    if joints_right is None:
+        joints_right = JOINTS_RIGHT
+
+    N = input_2d.size(0)
+    augmented = (
+        getattr(opt, "test_augmentation", False)
+        and input_2d.dim() == 5
+        and input_2d.shape[1] == 2
+    )
+
+    if augmented:
+        input_non_flip = (
+            input_2d[:, 0]
+            .contiguous()
+            .view(N, -1, opt.n_joints, opt.in_channels, 1)
+            .permute(0, 3, 1, 2, 4)
+            .contiguous()
+        )
+        input_flip = (
+            input_2d[:, 1]
+            .contiguous()
+            .view(N, -1, opt.n_joints, opt.in_channels, 1)
+            .permute(0, 3, 1, 2, 4)
+            .contiguous()
+        )
+
+        output_non_flip, _ = model(input_non_flip)
+        output_flip, _ = model(input_flip)
+
+        output_flip[:, 0].mul_(-1)
+        swap_left_right = joints_left + joints_right
+        swap_right_left = joints_right + joints_left
+        output_flip[:, :, :, swap_left_right] = output_flip[:, :, :, swap_right_left]
+
+        output = (output_non_flip + output_flip) / 2.0
+        return output, input_non_flip
+
+    inputs_2d = (
+        input_2d.view(N, -1, opt.n_joints, opt.in_channels, 1)
+        .permute(0, 3, 1, 2, 4)
+        .contiguous()
+    )
+    output, _ = model(inputs_2d)
+    return output, inputs_2d
 
 def _collect_rng_states():
     """Collect RNG states so that training can be resumed deterministically."""
@@ -192,7 +249,7 @@ def train_epoch(opt, train_loader, model, loss_net, optimizer, optimizer_loss, l
             .contiguous()
             .view(N, -1, opt.out_joints, opt.out_channels)
         )
-        pred_detached = pred_detached * scale.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+        
         module = _get_module(model)
         t_idx = getattr(module, "t_idx", inputs_2d.shape[2] // 2)
         inputs_2d_center = inputs_2d[
@@ -265,15 +322,11 @@ def evaluate(opt, test_loader, model):
             batch_cam, gt_3D, input_2D, seq, scale, bb_box = data
             [input_2D, gt_3D, scale] = get_varialbe('test', [input_2D, gt_3D, scale])
             N = input_2D.size(0)
-            inputs_2d = (
-                input_2D.view(N, -1, opt.n_joints, opt.in_channels, 1)
-                .permute(0, 3, 1, 2, 4)
-                .contiguous()
-            )
+            
             inputs_3d = gt_3D.view(N, -1, opt.out_joints, opt.out_channels)
-            pred_3d, _ = model(inputs_2d)
+            pred_3d_raw, _ = _forward_pose_model(opt, model, input_2D)
             pred_3d = (
-                pred_3d.permute(0, 2, 3, 4, 1)
+                pred_3d_raw.permute(0, 2, 3, 4, 1)
                 .contiguous()
                 .view(N, -1, opt.out_joints, opt.out_channels)
             )

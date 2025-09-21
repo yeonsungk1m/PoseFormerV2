@@ -230,7 +230,7 @@ if torch.cuda.is_available():
 if args.resume or args.evaluate:
     chk_filename = os.path.join(args.checkpoint, args.resume if args.resume else args.evaluate)
     print('Loading checkpoint', chk_filename)
-    checkpoint = torch.load(chk_filename, map_location=lambda storage, loc: storage)
+    checkpoint = torch.load(chk_filename, map_location="cpu", weights_only=False)
     model_pos_train.load_state_dict(checkpoint['model_pos'], strict=False)
     model_pos.load_state_dict(checkpoint['model_pos'], strict=False)
     if 'loss_net' in checkpoint:

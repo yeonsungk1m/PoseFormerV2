@@ -131,8 +131,13 @@ class opts():
             ckp_suffix = '_pretrain'
         else:
             ckp_suffix = '_STMO'
-        self.opt.checkpoint = 'checkpoint/'+self.opt.checkpoint + '_%d'%(self.opt.pad*2+1) + \
-            '%s'%ckp_suffix
+        checkpoint_root = self.opt.checkpoint
+        if not os.path.isabs(checkpoint_root):
+            checkpoint_root = os.path.join('checkpoint', checkpoint_root)
+
+        checkpoint_root = os.path.normpath(checkpoint_root)
+        frames_span = self.opt.pad * 2 + 1
+        self.opt.checkpoint = '{}_{}{}'.format(checkpoint_root, frames_span, ckp_suffix)
 
         if not os.path.exists(self.opt.checkpoint):
             os.makedirs(self.opt.checkpoint)
